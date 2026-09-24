@@ -11,7 +11,7 @@ export default function CandidateCard({ candidate, selected, onSelect, disabled 
       } ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
     >
       <div className="flex items-start justify-between">
-        <div className="grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-blue-500/30 to-violet-500/30 text-2xl font-bold">
+        <div className="grid h-16 w-16 place-items-center rounded-2xl bg-linear-to-br from-blue-500/30 to-violet-500/30 text-2xl font-bold">
           {candidate.symbol}
         </div>
         {selected && <CheckCircle2 className="text-blue-400" />}
