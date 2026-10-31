@@ -1,0 +1,4 @@
+import jwt from 'jsonwebtoken';import User from '../models/User.js';import {fail} from '../config/validation.js';
+export const auth=async(req,res,next)=>{try{const t=req.headers.authorization?.match(/^Bearer (.+)$/)?.[1];if(!t)throw fail('Authentication required',401);const payload=jwt.verify(t,process.env.JWT_SECRET,{algorithms:['HS256']});const user=await User.findById(payload.sub);if(!user||!user.emailVerified)throw fail('Account not verified',401);req.user=user;next();}catch(e){next(e.status?e:fail('Invalid or expired session',401));}};
+export const roles=(...accepted)=>(req,res,next)=>accepted.includes(req.user?.role)?next():next(fail('Insufficient permissions',403));
+export const approved=(req,res,next)=>req.user.approved&&req.user.profileComplete?next():next(fail('Account approval and completed profile required',403));

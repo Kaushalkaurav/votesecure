@@ -1,0 +1,1 @@
+import {configureStore} from '@reduxjs/toolkit';import auth from './slices/authSlice';import election from './slices/electionSlice';import candidate from './slices/candidateSlice';import vote from './slices/voteSlice';import admin from './slices/adminSlice';export default configureStore({reducer:{auth,elections:election,candidates:candidate,vote,admin}});

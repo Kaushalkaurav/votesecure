@@ -1,0 +1,1 @@
+import {createSlice} from '@reduxjs/toolkit';const slice=createSlice({name:'election',initialState:{items:[],loading:false},reducers:{setItems:(s,a)=>{s.items=a.payload;}}});export const {setItems}=slice.actions;export default slice.reducer;

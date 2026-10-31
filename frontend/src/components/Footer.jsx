@@ -1,0 +1,1 @@
+export default function Footer(){return <footer className="border-t border-slate-800 py-8 text-center text-xs muted">VoteSecure · Academic election prototype · MITS Gwalior · Not certified for public elections</footer>}
