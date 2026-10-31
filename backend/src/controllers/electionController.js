@@ -2,7 +2,7 @@ import mongoose from 'mongoose';import Election from '../models/Election.js';imp
 const id=(v)=>{if(!mongoose.isValidObjectId(v))throw fail('Invalid identifier');return v;};
 const external=(e)=>({...e.toObject(),state:statusOf(e)});
 export const publishedList=async(req,res)=>{const elections=await Election.find({publishedAt:{$type:'date'}}).select('title position type endAt publishedAt').sort({publishedAt:-1}).lean();res.json({elections});};
-export const list=async(req,res)=>{const docs=await Election.find({status:{$nin:['draft','cancelled']}}).sort({startAt:-1}).lean();res.json({elections:docs.map(e=>({...e,state:statusOf(e)}))});};
+export const list=async(req,res)=>{const now=new Date();const docs=await Election.find({status:'scheduled',startAt:{$lte:now},endAt:{$gt:now},publishedAt:{$exists:false}}).sort({startAt:-1}).lean();res.json({elections:docs.map(e=>({...e,state:statusOf(e)}))});};
 export const one=async(req,res)=>{const e=await Election.findById(id(req.params.id));if(!e||e.status==='draft'&&req.user.role!=='admin')throw fail('Election not found',404);const c=await Candidate.find({election:e.id,status:'approved'}).populate('user','name branch year').lean();res.json({election:external(e),candidates:c.map(x=>({_id:x._id,user:x.user,manifesto:x.manifesto,symbol:x.symbol,photoUrl:x.photoUrl,description:x.description}))});};
 export const create=async(req,res)=>{const {title,position,type,scope='college',branch,startAt,endAt,allowSelfVote=true}=req.body;const start=new Date(startAt),end=new Date(endAt);if(!title||!position||!type||!['class','department','college','university','institution'].includes(scope)||!Number.isFinite(+start)||!Number.isFinite(+end)||end<=start||start<=new Date()||(scope==='department'||scope==='class')&&!branch)throw fail('Invalid election configuration and dates');const e=await Election.create({title,position,type,scope,branch,startAt:start,endAt:end,allowSelfVote:Boolean(allowSelfVote),createdBy:req.user.id});await Audit.create({action:'ELECTION_CREATED',actor:req.user.id,election:e.id});res.status(201).json({election:external(e)});};
 export const activate=async(req,res)=>{const e=await Election.findById(id(req.params.id));if(!e||e.status!=='draft'||e.startAt<=new Date())throw fail('Only a future draft election can be scheduled');const session=await mongoose.startSession();try{await session.withTransaction(async()=>{const locked=await Election.findOneAndUpdate({_id:e.id,status:'draft',startAt:{$gt:new Date()}},{$set:{status:'scheduled'}},{new:true,session});if(!locked)throw fail('Election already scheduled',409);const candidates=await Candidate.countDocuments({election:e.id,status:'approved'}).session(session);if(!candidates)throw fail('Approve a candidate before scheduling');const users=await User.find({emailVerified:true,approved:true,profileComplete:true}).select('_id branch').session(session).lean();const roster=users.filter(u=>eligible(u,locked)).map(u=>({election:e.id,user:u._id}));if(!roster.length)throw fail('No eligible voters');await Eligibility.insertMany(roster,{session});await Audit.create([{action:'ELECTION_SCHEDULED',actor:req.user.id,election:e.id,detail:'Frozen roster: '+roster.length+' voters; '+candidates+' candidates'}],{session});});}finally{await session.endSession();}res.json({election:external(await Election.findById(e.id))});};
@@ -36,4 +36,33 @@ const roster=await Eligibility.find({election:e.id}).select('user').session(sess
 if(roster.length)await Notification.insertMany(roster.map(u=>({user:u.user,election:e.id,title:'Official results published',message:'Results for '+e.title+' are available.',link:'/results/'+e.id})),{session});
 await Audit.create([{action:'RESULTS_AUTO_PUBLISHED',election:e.id,detail:'Election ended; official results released'}],{session});
 });}catch(err){console.error('Automatic results publication failed for election',String(row._id),err.message)}finally{await session.endSession();}}
+};
+
+// Create and schedule one complete election atomically, including candidates and frozen eligibility.
+export const createComplete=async(req,res)=>{
+const {title,position,type,scope='college',branch,startAt,endAt,allowSelfVote=true,candidates=[]}=req.body||{};
+const start=new Date(startAt),end=new Date(endAt);
+if(typeof title!=='string'||!title.trim()||typeof position!=='string'||!position.trim()||typeof type!=='string'||!type.trim())throw fail('Election title, position and type are required');
+if(!['class','department','college','university','institution'].includes(scope))throw fail('Invalid election scope');
+if(['class','department'].includes(scope)&&(!branch||!String(branch).trim()))throw fail('Branch is required');
+if(!Number.isFinite(+start)||!Number.isFinite(+end)||start<=new Date()||end<=start)throw fail('Start and end times must be future dates in chronological order');
+if(!Array.isArray(candidates)||candidates.length<2||candidates.length>50)throw fail('Provide at least two and at most 50 candidates');
+const seen=new Set();
+const requested=candidates.map(c=>({email:String(c.email||'').trim().toLowerCase(),symbol:String(c.symbol||'').trim().slice(0,100),manifesto:String(c.manifesto||'').trim().slice(0,3000),description:String(c.description||'').trim().slice(0,1000),photoUrl:String(c.photoUrl||'').trim().slice(0,1000)}));
+for(const c of requested){if(!c.email||!c.symbol||!c.manifesto||seen.has(c.email))throw fail('Each candidate needs a unique email, symbol and manifesto');seen.add(c.email);}
+const users=await User.find({emailVerified:true,approved:true,profileComplete:true}).select('_id email branch role').lean();
+const electionShape={scope,branch};
+const roster=users.filter(u=>eligible(u,electionShape));
+if(!roster.length)throw fail('No eligible approved voters. Approve voters first.');
+const byEmail=new Map(roster.map(u=>[u.email,u]));
+for(const c of requested){const u=byEmail.get(c.email);if(!u||u.role!=='student')throw fail('Candidate '+c.email+' must be a verified, approved, profile-complete student eligible for this election');}
+const session=await mongoose.startSession();let created;
+try{await session.withTransaction(async()=>{
+const [e]=await Election.create([{title:title.trim(),position:position.trim(),type:type.trim(),scope,branch,startAt:start,endAt:end,allowSelfVote:allowSelfVote===true,status:'scheduled',createdBy:req.user.id}],{session});
+created=e;
+await Candidate.insertMany(requested.map(c=>({election:e._id,user:byEmail.get(c.email)._id,symbol:c.symbol,manifesto:c.manifesto,description:c.description,photoUrl:c.photoUrl,status:'approved',reviewedBy:req.user.id,reviewedAt:new Date()})),{session});
+await Eligibility.insertMany(roster.map(u=>({election:e._id,user:u._id})),{session});
+await Audit.create([{action:'ELECTION_SCHEDULED',actor:req.user.id,election:e._id,detail:'Complete election created with '+requested.length+' candidates and '+roster.length+' eligible voters'}],{session});
+});}finally{await session.endSession();}
+res.status(201).json({election:external(created),candidateCount:requested.length,eligibleCount:roster.length});
 };
