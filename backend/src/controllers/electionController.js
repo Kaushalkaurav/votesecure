@@ -13,3 +13,26 @@ export const results=async(req,res)=>{const e=await Election.findById(id(req.par
 export const publish=async(req,res)=>{const e=await Election.findById(id(req.params.id));if(!e||statusOf(e)!=='closed')throw fail('Election must close before publication');const session=await mongoose.startSession();try{await session.withTransaction(async()=>{e.publishedAt=new Date();await e.save({session});await Audit.create([{action:'RESULTS_PUBLISHED',actor:req.user.id,election:e.id}],{session});const users=await User.find({emailVerified:true,approved:true,profileComplete:true}).select('_id branch').session(session).lean();const roster=await Eligibility.find({election:e.id}).select('user').session(session).lean();const rosterIds=new Set(roster.map(r=>String(r.user)));const eligibleUsers=users.filter(u=>rosterIds.has(String(u._id)));if(eligibleUsers.length)await Notification.insertMany(eligibleUsers.map(u=>({user:u._id,election:e.id,title:'Official results published',message:`Results for ${e.title} are available.`,link:`/results/${e.id}`})),{session});});}finally{await session.endSession();}res.json({message:'Results published',publishedAt:e.publishedAt});};
 export const adminDetail=async(req,res)=>{const e=await Election.findById(id(req.params.id));if(!e)throw fail('Election not found',404);const filter={emailVerified:true,approved:true,profileComplete:true};if(['department','class'].includes(e.scope))filter.branch=e.branch;const totalEligible=e.status==='draft'?await User.countDocuments(filter):await Eligibility.countDocuments({election:e.id});const cast=await Participation.countDocuments({election:e.id});const candidates=await Candidate.countDocuments({election:e.id,status:'approved'});const audit=await Audit.find({election:e.id}).select('action detail createdAt').sort({createdAt:-1}).limit(30).lean();const output={election:external(e),totalEligible,votesCast:cast,remaining:Math.max(0,totalEligible-cast),turnout:totalEligible?Math.round(cast/totalEligible*10000)/100:0,approvedCandidates:candidates,audit};if(e.publishedAt){const counts=await tally(e.id);const cs=await Candidate.find({election:e.id,status:'approved'}).populate('user','name');output.results=cs.map(c=>({name:c.user?.name||'Candidate',votes:counts[c.id]||0}));}res.json(output);};
 export const adminList=async(req,res)=>{const docs=await Election.find().sort({createdAt:-1});res.json({elections:docs.map(external)});};
+
+// Administrator may register an existing verified, approved student as a candidate while the election is a draft.
+export const addCandidate=async(req,res)=>{
+const e=await Election.findById(id(req.params.id));if(!e||e.status!=='draft')throw fail('Candidates can only be added to a draft election',409);
+const email=String(req.body.email||'').trim().toLowerCase();
+const user=await User.findOne({email});
+if(!user||!user.emailVerified||!user.approved||!user.profileComplete||!eligible(user,e))throw fail('Candidate must be an approved eligible student',400);
+const data={election:e.id,user:user.id,status:'approved',reviewedBy:req.user.id,reviewedAt:new Date(),manifesto:String(req.body.manifesto||'').slice(0,3000),description:String(req.body.description||'').slice(0,1000),symbol:String(req.body.symbol||'').slice(0,100),photoUrl:String(req.body.photoUrl||'').slice(0,1000)};
+if(!data.symbol.trim())throw fail('Candidate symbol is required');
+try{const c=await Candidate.create(data);await Audit.create({action:'CANDIDATE_ADDED',actor:req.user.id,election:e.id,detail:'Candidate registered by administrator'});res.status(201).json({candidate:c});}catch(err){if(err.code===11000)throw fail('Candidate already exists in this election',409);throw err;}
+};
+
+// Called by the server scheduler; publication is idempotent under concurrent workers.
+export const publishClosedElections=async()=>{
+const closed=await Election.find({status:'scheduled',endAt:{$lte:new Date()},publishedAt:{$exists:false}}).select('_id').lean();
+for(const row of closed){const session=await mongoose.startSession();try{await session.withTransaction(async()=>{
+const e=await Election.findOneAndUpdate({_id:row._id,status:'scheduled',endAt:{$lte:new Date()},publishedAt:{$exists:false}},{$set:{publishedAt:new Date()}},{session,new:true});
+if(!e)return;
+const roster=await Eligibility.find({election:e.id}).select('user').session(session).lean();
+if(roster.length)await Notification.insertMany(roster.map(u=>({user:u.user,election:e.id,title:'Official results published',message:'Results for '+e.title+' are available.',link:'/results/'+e.id})),{session});
+await Audit.create([{action:'RESULTS_AUTO_PUBLISHED',election:e.id,detail:'Election ended; official results released'}],{session});
+});}catch(err){console.error('Automatic results publication failed for election',String(row._id),err.message)}finally{await session.endSession();}}
+};
