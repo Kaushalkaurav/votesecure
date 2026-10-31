@@ -66,3 +66,12 @@ await Audit.create([{action:'ELECTION_SCHEDULED',actor:req.user.id,election:e._i
 });}finally{await session.endSession();}
 res.status(201).json({election:external(created),candidateCount:requested.length,eligibleCount:roster.length});
 };
+
+// Safely remove expired unscheduled drafts from the active admin list; preserve audit history.
+export const discardExpiredDraft=async(req,res)=>{
+const electionId=id(req.params.id);
+const e=await Election.findOneAndUpdate({_id:electionId,status:'draft',startAt:{$lte:new Date()}},{$set:{status:'cancelled'}},{new:true});
+if(!e)throw fail('Only drafts with an expired start time can be discarded',409);
+await Audit.create({action:'EXPIRED_DRAFT_DISCARDED',actor:req.user.id,election:e.id,detail:'Expired unscheduled draft archived by administrator'});
+res.json({message:'Expired draft removed from active elections',electionId:e.id});
+};
