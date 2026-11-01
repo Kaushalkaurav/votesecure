@@ -80,15 +80,12 @@ export const liveMonitor=async(req,res)=>{
  const now=new Date();
  const elections=await Election.find({status:'scheduled',startAt:{$lte:now},endAt:{$gt:now},publishedAt:{$exists:false}}).sort({endAt:1}).lean();
  const data=await Promise.all(elections.map(async e=>{
-  const [registered,cast,ballots,cs,counts]=await Promise.all([
+  const [registered,cast,ballots]=await Promise.all([
    Eligibility.countDocuments({election:e._id}),
    Participation.countDocuments({election:e._id}),
-   Vote.countDocuments({election:e._id}),
-   Candidate.find({election:e._id,status:'approved'}).populate('user','name').lean(),
-   tally(e._id)
+   Vote.countDocuments({election:e._id})
   ]);
-  const candidates=cs.map(c=>({id:c._id,name:c.user?.name||'Candidate',symbol:c.symbol,votes:counts[String(c._id)]||0})).sort((a,b)=>b.votes-a.votes);
-  return {id:e._id,title:e.title,position:e.position,scope:e.scope,branch:e.branch,endAt:e.endAt,eligible:registered,cast,ballots,turnout:registered?Math.round(cast/registered*10000)/100:0,candidates};
+  return {id:e._id,title:e.title,position:e.position,scope:e.scope,branch:e.branch,endAt:e.endAt,eligible:registered,cast,ballots,turnout:registered?Math.round(cast/registered*10000)/100:0};
  }));
  res.set('Cache-Control','no-store');res.json({updatedAt:new Date(),elections:data});
 };
