@@ -2,6 +2,15 @@ import nodemailer from 'nodemailer';
 export async function sendOtp(to,code){
  const subject='VoteSecure verification code';
  const text='Your VoteSecure verification code is '+code+'. It expires in 10 minutes. Never share this code.';
+ if(process.env.BREVO_API_KEY){
+  if(!process.env.BREVO_FROM)throw Error('BREVO_FROM is not configured');
+  const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),10000);
+  try{
+   const response=await fetch('https://api.brevo.com/v3/smtp/email',{method:'POST',headers:{'api-key':process.env.BREVO_API_KEY,'Content-Type':'application/json'},body:JSON.stringify({sender:{name:'VoteSecure',email:process.env.BREVO_FROM},to:[{email:to}],subject,textContent:text}),signal:controller.signal});
+   if(!response.ok){console.error('Brevo OTP send failed, HTTP',response.status);throw Error('OTP email delivery failed');}
+  }finally{clearTimeout(timeout);}
+  return;
+ }
  if(process.env.RESEND_API_KEY){
   if(!process.env.RESEND_FROM)throw Error('RESEND_FROM must be configured');
   const controller=new AbortController();
