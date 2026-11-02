@@ -1,3 +1,3 @@
-// Keep this literal in sync with the backend's default institutional address policy.
-export const MITS_EMAIL = /^24mc10[a-zA-Z]{2}[0-9]{2}@mitsgwl\.ac\.in$/;
-export const validEmail = email => MITS_EMAIL.test(String(email || '').trim().toLowerCase());
+// Match the backend default MITS institutional enrollment email format.
+export const MITS_EMAIL = /^[0-9]{2}[a-zA-Z]{2}[0-9]{1,2}[a-zA-Z]{2}[0-9]{2,3}@mitsgwl\.ac\.in$/i;
+export const validEmail = email => MITS_EMAIL.test(String(email || '').trim());
