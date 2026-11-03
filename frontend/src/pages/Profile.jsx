@@ -86,7 +86,7 @@ export default function Profile(){
    </label>
    <label className="field">Academic year
     <select required value={year} onChange={e=>setYear(e.target.value)} className="w-full">
-     {[1,2,3,4,5].map(y=><option key={y} value={y}>Year {y}</option>)}
+     {[1,2,3,4].map(y=><option key={y} value={y}>Year {y}</option>)}
     </select>
    </label>
    <p className="text-sm muted">Account approval: <b>{user?.approved?'Approved':'Pending'}</b></p>
